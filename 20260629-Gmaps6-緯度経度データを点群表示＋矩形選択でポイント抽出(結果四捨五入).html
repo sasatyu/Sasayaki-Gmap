@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>緯度経度データを点群表示＋矩形選択でポイント抽出</title>
+
+  <style>
+    #map {
+      width: 100%;
+      height: 600px;
+    }
+
+    .bottom-container {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+      align-items: flex-start;
+    }
+
+    textarea {
+      width: 40%;
+      height: 120px;
+    }
+
+    #output {
+      width: 60%;
+      height: 120px;
+      white-space: pre;
+      border: 1px solid #ccc;
+      padding: 5px;
+      overflow-y: auto;
+      background: #f9f9f9;
+      font-family: monospace;
+    }
+
+    .button-area {
+      margin-top: 10px;
+      margin-bottom: 10px;
+    }
+
+    button {
+      margin-right: 8px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+
+    #selectButton.active {
+      background: #1a73e8;
+      color: white;
+      font-weight: bold;
+    }
+
+    .decimal-options {
+      display: inline-block;
+      margin-left: 12px;
+    }
+
+    .decimal-options label {
+      margin-right: 10px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+  <h3>緯度経度データを点群表示＋矩形選択でポイント抽出</h3>
+
+  <div class="bottom-container">
+    <textarea id="input" placeholder="139.0000 35.0000&#10;139.0010 35.0010"></textarea>
+
+    <div id="output">選択結果がここに表示されます</div>
+
+    <button onclick="copyOutput()">クリップボードにコピー</button>
+  </div>
+
+  <div class="button-area">
+    <button onclick="loadPoints()">点群を表示</button>
+    <button id="selectButton" onclick="toggleSelectMode()">点群選択モードON</button>
+    <button onclick="clearSelection()">クリア</button>
+
+    <span class="decimal-options">
+      <label>
+        <input
+          type="radio"
+          name="decimalMode"
+          value="4"
+          checked
+          onchange="renderSelectedOutput()"
+        >
+        小数第4位まで
+      </label>
+
+      <label>
+        <input
+          type="radio"
+          name="decimalMode"
+          value="3"
+          onchange="renderSelectedOutput()"
+        >
+        小数第3位まで
+      </label>
+    </span>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    let map;
+    let markers = [];
+    let points = [];
+    let selectedPoints = [];
+
+    let selectMode = false;
+    let isSelecting = false;
+    let startLatLng = null;
+    let selectionRectangle = null;
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById("map"), {
+        center: { lat: 35.281, lng: 139.214 },
+        zoom: 10,
+        mapTypeId: "roadmap"
+      });
+
+      map.addListener("mousedown", function(e) {
+        if (!selectMode) return;
+
+        isSelecting = true;
+        startLatLng = e.latLng;
+
+        if (selectionRectangle) {
+          selectionRectangle.setMap(null);
+        }
+
+        selectionRectangle = new google.maps.Rectangle({
+          map: map,
+          bounds: new google.maps.LatLngBounds(startLatLng, startLatLng),
+          strokeColor: "#1a73e8",
+          strokeOpacity: 1,
+          strokeWeight: 2,
+          fillColor: "#1a73e8",
+          fillOpacity: 0.18,
+          clickable: false
+        });
+      });
+
+      map.addListener("mousemove", function(e) {
+        if (!isSelecting || !startLatLng || !selectionRectangle) return;
+
+        updateRectangle(e.latLng);
+      });
+
+      map.addListener("mouseup", function(e) {
+        if (!isSelecting || !startLatLng || !selectionRectangle) return;
+
+        updateRectangle(e.latLng);
+
+        isSelecting = false;
+        startLatLng = null;
+
+        const bounds = selectionRectangle.getBounds();
+        extractPointsInBounds(bounds);
+
+        setSelectMode(false);
+      });
+    }
+
+    function updateRectangle(currentLatLng) {
+      const bounds = new google.maps.LatLngBounds();
+
+      bounds.extend(startLatLng);
+      bounds.extend(currentLatLng);
+
+      selectionRectangle.setBounds(bounds);
+    }
+
+    function toggleSelectMode() {
+      setSelectMode(!selectMode);
+    }
+
+    function setSelectMode(mode) {
+      selectMode = mode;
+
+      const button = document.getElementById("selectButton");
+
+      if (selectMode) {
+        button.textContent = "点群選択モードON";
+        button.classList.add("active");
+
+        map.setOptions({
+          draggable: false,
+          draggableCursor: "crosshair"
+        });
+
+        map.getDiv().style.cursor = "crosshair";
+      } else {
+        button.textContent = "点群選択モードON";
+        button.classList.remove("active");
+
+        map.setOptions({
+          draggable: true,
+          draggableCursor: null
+        });
+
+        map.getDiv().style.cursor = "";
+      }
+    }
+
+    function getDecimalPlaces() {
+      const selectedRadio = document.querySelector('input[name="decimalMode"]:checked');
+      return Number(selectedRadio.value);
+    }
+
+    function renderSelectedOutput() {
+      if (!selectedPoints || selectedPoints.length === 0) {
+        return;
+      }
+
+      const decimalPlaces = getDecimalPlaces();
+
+      const uniqueMap = new Map();
+
+      selectedPoints.forEach(p => {
+        const lngText = p.lng.toFixed(decimalPlaces);
+        const latText = p.lat.toFixed(decimalPlaces);
+
+        const key = `${lngText}_${latText}`;
+        const text = `${lngText}\t${latText}`;
+
+        if (!uniqueMap.has(key)) {
+          uniqueMap.set(key, text);
+        }
+      });
+
+      const outputLines = Array.from(uniqueMap.values());
+
+      document.getElementById("output").textContent = outputLines.join("\n");
+    }
+
+    function extractPointsInBounds(bounds) {
+      if (points.length === 0) {
+        selectedPoints = [];
+        document.getElementById("output").textContent = "点群データがありません";
+        return;
+      }
+
+      selectedPoints = points.filter(p =>
+        bounds.contains(new google.maps.LatLng(p.lat, p.lng))
+      );
+
+      if (selectedPoints.length === 0) {
+        document.getElementById("output").textContent = "範囲内の点はありません";
+        return;
+      }
+
+      renderSelectedOutput();
+    }
+
+    function loadPoints() {
+      markers.forEach(m => m.setMap(null));
+      markers = [];
+      points = [];
+      selectedPoints = [];
+
+      if (selectionRectangle) {
+        selectionRectangle.setMap(null);
+        selectionRectangle = null;
+      }
+
+      const inputText = document.getElementById("input").value.trim();
+
+      if (!inputText) {
+        alert("緯度経度データを入力してください");
+        return;
+      }
+
+      const lines = inputText.split("\n");
+
+      lines.forEach(line => {
+        const parts = line.trim().split(/[\s,]+/);
+
+        if (parts.length < 2) return;
+
+        const lng = Number(parts[0]);
+        const lat = Number(parts[1]);
+
+        if (!isNaN(lat) && !isNaN(lng)) {
+          const p = { lat, lng };
+          points.push(p);
+
+          const marker = new google.maps.Marker({
+            position: p,
+            map: map
+          });
+
+          markers.push(marker);
+        }
+      });
+
+      if (points.length > 0) {
+        map.setCenter(points[0]);
+      }
+
+      document.getElementById("output").textContent =
+        points.length + "件の点群を表示しました";
+    }
+
+    function clearSelection() {
+      if (selectionRectangle) {
+        selectionRectangle.setMap(null);
+        selectionRectangle = null;
+      }
+
+      selectedPoints = [];
+
+      document.getElementById("output").textContent = "選択結果がここに表示されます";
+    }
+
+    function copyOutput() {
+      const text = document.getElementById("output").textContent;
+
+      if (
+        !text ||
+        text.includes("ありません") ||
+        text.includes("表示しました") ||
+        text.includes("ここに表示")
+      ) {
+        alert("コピーする選択結果がありません");
+        return;
+      }
+
+      navigator.clipboard.writeText(text)
+        .then(() => alert("コピーしました"))
+        .catch(() => alert("コピーに失敗しました"));
+    }
+
+    window.initMap = initMap;
+  </script>
+
+  <script
+    async
+    defer
+    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBlAKA1Vz5_WSMSV2JYGMY2Zic5OxybQq4&callback=initMap">
+  </script>
+</body>
+</html>
